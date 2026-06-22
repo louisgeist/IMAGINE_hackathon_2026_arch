@@ -1,7 +1,10 @@
 from typing import Any, Dict, List, Tuple
 
+import os
 import hydra
+import torch
 import rootutils
+import subprocess
 from lightning import LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
@@ -45,13 +48,13 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Tuple[dict, dict] with metrics and dict with all instantiated objects.
     """
-    assert cfg.ckpt_path
+    assert cfg.checkpoints
 
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
-    log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.model)
+    log.info(f"Instantiating model <{cfg.module._target_}>")
+    model: LightningModule = hydra.utils.instantiate(cfg.module)
 
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
@@ -72,10 +75,33 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log_hyperparameters(object_dict)
 
     log.info("Starting testing!")
-    trainer.test(model=model, datamodule=datamodule, ckpt_path=cfg.ckpt_path)
 
     # for predictions use trainer.predict(...)
-    # predictions = trainer.predict(model=model, dataloaders=dataloaders, ckpt_path=cfg.ckpt_path)
+    for ckpt_cfg in cfg.checkpoints:
+        ckpt_path = os.path.join(cfg.paths.log_dir, ckpt_cfg.name, 'runs', ckpt_cfg.date, 'checkpoints', ckpt_cfg.ckpt)
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        # If the model was compiled, we need to strip the "_orig_mod" prefix from the dict keys
+        renamed_ckpt = {} 
+        for k, v in ckpt["state_dict"].items():
+            new_k = k.replace("_orig_mod.", "")
+            renamed_ckpt[new_k] = v
+        model.load_state_dict(renamed_ckpt)
+        predictions = trainer.predict(model=model, datamodule=datamodule, return_predictions=True)
+        predictions = torch.cat(predictions, axis=0)
+    
+        out_dir = os.path.join(cfg.paths.prediction_dir, ckpt_cfg.name, ckpt_cfg.date)
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, 'predictions.pt')
+        torch.save(predictions, out_path)
+        
+        # Send to evaluation server
+        subprocess.call([
+            "rsync", out_path, f"172.22.11.44::eval_server/{cfg.team_name}/{ckpt_cfg.name}/"
+        ])
+        emissions_path = os.path.join(cfg.paths.codecarbon_dir, 'emissions.csv')
+        subprocess.call([
+            "rsync", emissions_path, f"172.22.11.44::eval_server/{cfg.team_name}/"
+        ])
 
     metric_dict = trainer.callback_metrics
 
@@ -91,7 +117,7 @@ def main(cfg: DictConfig) -> None:
     # apply extra utilities
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
-
+    torch.set_float32_matmul_precision('high') # To use Tensor cores
     evaluate(cfg)
 
 

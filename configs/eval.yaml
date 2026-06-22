@@ -1,0 +1,38 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - datamodule: imagenet_test
+  - module: vit_s_16
+  - trainer: imagenet_vit_s_16
+  - logger: null
+  - callbacks: null
+  - paths: default
+  - extras: default
+  - hydra: hydra_eval
+  - codecarbon: null
+  - experiment: null
+  - hparams_search: null
+  - debug: null
+
+# experiment name, determines output directory path
+team_name: "TODO"
+tags: ["baseline", "evaluate"]
+
+# seed for random number generators in pytorch, numpy and python.random
+seed: 0
+
+trainer:
+  precision: 32
+
+module:
+  compile: false
+
+# TODO Replace the placeholders with the checkpoints you want to test
+checkpoints:
+  - name: "experiment1"
+    date: "2026-06-21_10-20-40"
+    ckpt: "last.ckpt"
+  - name: "experiment2"
+    date: "2026-06-22_20-30-40"
+    ckpt: "epoch10.ckpt"
