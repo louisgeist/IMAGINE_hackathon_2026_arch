@@ -38,6 +38,7 @@ class VisionTransformer(nn.Module):
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         conv_stem_configs: Optional[list[ConvStemConfig]] = None,
+        num_registers = 0,
     ):
         super().__init__()
         torch._assert(image_size % patch_size == 0, "Input shape indivisible by patch size!")
@@ -50,6 +51,7 @@ class VisionTransformer(nn.Module):
         self.num_classes = num_classes
         self.representation_size = representation_size
         self.norm_layer = norm_layer
+        self.num_registers = num_registers
 
         if conv_stem_configs is not None:
             # As per https://arxiv.org/abs/2106.14881
@@ -82,6 +84,10 @@ class VisionTransformer(nn.Module):
 
         # Add a class token
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+        if self.num_registers > 0:
+            self.registers = nn.Parameter(torch.zeros(1, self.num_registers, hidden_dim ))
+        else:
+            self.registers = None
         seq_length += 1
 
         self.encoder = Encoder(
@@ -98,9 +104,9 @@ class VisionTransformer(nn.Module):
 
         heads_layers: OrderedDict[str, nn.Module] = OrderedDict()
         if representation_size is None:
-            heads_layers["head"] = nn.Linear(hidden_dim, num_classes)
+            heads_layers["head"] = nn.Linear(hidden_dim * (self.num_registers + 1), num_classes)
         else:
-            heads_layers["pre_logits"] = nn.Linear(hidden_dim, representation_size)
+            heads_layers["pre_logits"] = nn.Linear(hidden_dim * (self.num_registers + 1), representation_size)
             heads_layers["act"] = nn.Tanh()
             heads_layers["head"] = nn.Linear(representation_size, num_classes)
 
@@ -169,12 +175,13 @@ class VisionTransformer(nn.Module):
 
         # Expand the class token to the full batch
         batch_class_token = self.class_token.expand(n, -1, -1)
-        x = torch.cat([batch_class_token, x], dim=1)
+        batch_registers = self.registers.expand(n, self.num_registers, self.hidden_dim) # check clean way to do it without registers
+        x = torch.cat([batch_class_token, batch_registers, x], dim=1)
 
         x = self.encoder(x)
 
         # Classifier "token" as used by standard language architectures
-        x = x[:, 0]
+        x = x[:, self.num_registers] # concatenating for now
 
         x = self.heads(x)
 
