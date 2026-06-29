@@ -22,7 +22,7 @@ defaults:
   - debug: null
 
 # TODO write your team name
-team_name: "TODO"
+team_name: "arch"
 experiment_name: "baseline"
 
 # tags to help you identify your experiments
