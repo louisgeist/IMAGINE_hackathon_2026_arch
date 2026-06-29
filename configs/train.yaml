@@ -21,9 +21,13 @@ defaults:
   # debugging config (enable through command line, e.g. `python train.py debug=default)
   - debug: null
 
-team_name: ???       # TODO write your team name HERE
-experiment_name: ??? # TODO define this in your EXPERIMENT CONFIGS
-tags: ???            # TODO define this in your EXPERIMENT CONFIGS
+# TODO write your team name
+team_name: "arch"
+experiment_name: "baseline"
+
+# tags to help you identify your experiments
+# you can overwrite tags in experiment configs
+# overwrite from command line with `uv run src/train.py tags="[first_tag, second_tag]"`
 
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
 # Second tag options: train, pre-train, post-train, debug, <custom tag>
