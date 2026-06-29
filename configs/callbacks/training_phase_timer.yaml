@@ -1,0 +1,4 @@
+training_phase_timer:
+  _target_: src.callbacks.training_phase_timer.TrainingPhaseTimer
+  sync_cuda: True
+  log_fractions: True
