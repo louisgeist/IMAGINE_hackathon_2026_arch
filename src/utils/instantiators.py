@@ -1,6 +1,5 @@
-import contextlib
 import os
-from typing import List
+from typing import Dict, List
 
 import hydra
 from codecarbon import EmissionsTracker
@@ -13,13 +12,15 @@ from src.utils import pylogger
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 
-def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
+def instantiate_callbacks(callbacks_cfg: DictConfig) -> Dict[str, Callback]:
     """Instantiates callbacks from config.
 
+    Note: does not allow duplicate callback types!
+
     :param callbacks_cfg: A DictConfig object containing callback configurations.
-    :return: A list of instantiated callbacks.
+    :return: A dict of instantiated callbacks, indexed by callback class name.
     """
-    callbacks: List[Callback] = []
+    callbacks: Dict[str, Callback] = {}
 
     if not callbacks_cfg:
         log.warning("No callback configs found! Skipping..")
@@ -31,7 +32,8 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> List[Callback]:
     for _, cb_conf in callbacks_cfg.items():
         if isinstance(cb_conf, DictConfig) and "_target_" in cb_conf:
             log.info(f"Instantiating callback <{cb_conf._target_}>")
-            callbacks.append(hydra.utils.instantiate(cb_conf))
+            cb_name = cb_conf._target_.split(".")[-1]
+            callbacks[cb_name] = hydra.utils.instantiate(cb_conf)
 
     return callbacks
 
@@ -59,10 +61,9 @@ def instantiate_loggers(logger_cfg: DictConfig) -> List[Logger]:
     return logger
 
 
-def instantiate_emissions_tracker(cfg: DictConfig):
-    if not cfg.codecarbon:
-        log.warning("No CodeCarbon config found! Skipping...")
-        return contextlib.nullcontext()
+def instantiate_emissions_tracker(cfg: DictConfig) -> EmissionsTracker:
+
+    os.makedirs(cfg.codecarbon.output_dir, exist_ok=True)
 
     electricitymaps_api_key = None
     if os.path.isfile(cfg.paths.electricity_maps_key):

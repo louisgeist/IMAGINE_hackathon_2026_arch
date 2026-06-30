@@ -1,11 +1,25 @@
 _target_: codecarbon.EmissionsTracker
 project_name: "imagine-hackathon-2026"
 experiment_name: ${experiment_name}_${now:%Y-%m-%d}_${now:%H-%M-%S}
-measure_power_secs: 10
-save_to_file: True
-save_to_api: True
-api_call_interval: 6  # Will log to the API every 6 * 10 = 60 seconds
+measure_power_secs: 5
+log_time_series: True
 log_level: "WARNING"
 output_dir: ${paths.codecarbon_dir}${experiment_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}/
 tracking_mode: "process"
 gpu_ids: "0"  # Single-GPU tracking
+save_to_file: True
+log_interval: 1
+save_to_api: True
+api_call_interval: 60  # Will log to the API every 5 minutes (5 * 60)
+save_to_wandb: True
+
+# From Lightning's WandbLogger config
+wandb_kwargs:
+  name: ${logger.wandb.name}
+  group: ${logger.wandb.group}
+  entity: ${logger.wandb.entity}
+  tags: ${logger.wandb.tags}
+  save_dir: ${logger.wandb.save_dir}
+  offline: ${logger.wandb.offline}
+  id: ${logger.wandb.id}
+  project: ${logger.wandb.project}
