@@ -1,0 +1,20 @@
+_target_: lightning.pytorch.trainer.Trainer
+
+default_root_dir: ${paths.output_dir}
+
+accelerator: gpu
+devices: 1
+
+max_epochs: 25
+check_val_every_n_epoch: 1
+
+gradient_clip_val: 1.0
+gradient_clip_algorithm: "norm"
+log_every_n_steps: 25
+
+enable_checkpointing: True
+enable_model_summary: True
+deterministic: False
+benchmark: True
+
+max_time: "00:01:00:00" # This whole config is here just to document that this is how you limit time on Lightning

@@ -1,0 +1,19 @@
+defaults:
+    - vit_s_16
+    - _self_
+
+main_scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    max_lr: 0.1
+    total_steps: null
+    steps_per_epoch: null # Should be set within the code so that we know the exact number of steps per epoch
+    pct_start: 0.3
+    anneal_strategy: cos
+    cycle_momentum: true
+    base_momentum: 0.85
+    max_momentum: 0.95
+    div_factor: 25.0
+    final_div_factor: 10000
+    three_phase: false
+    last_epoch: -1

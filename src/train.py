@@ -73,6 +73,12 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         cfg.module.main_scheduler.T_max = (
             cfg.trainer.max_epochs * steps_per_epoch - cfg.module.warmup_steps
         )
+    elif "OneCycleLR" in cfg.module["main_scheduler"]["_target_"]:
+        bsize = cfg.datamodule.batch_size
+        cfg.module.main_scheduler.steps_per_epoch = math.ceil(
+            len(datamodule.data_train) / bsize
+        )
+        cfg.module.main_scheduler.epochs = cfg.module.max_epochs
 
     log.info(f"Instantiating module <{cfg.module._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.module)
@@ -85,7 +91,9 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     callbacks: List[Callback] = list(callback_dict.values())
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
+    trainer: Trainer = hydra.utils.instantiate(
+        cfg.trainer, callbacks=callbacks, logger=logger
+    )
 
     if "codecarbon" in cfg:
         log.info("Instantiating CodeCarbon tracker...")
