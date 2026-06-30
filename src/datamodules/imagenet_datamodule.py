@@ -245,7 +245,7 @@ class ImageNetDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
+            prefetch_factor=self.hparams.prefetch_factor if self.hparams.num_workers > 0 else None,
             collate_fn=self.collate_fn,
             shuffle=True,
         )
@@ -260,7 +260,7 @@ class ImageNetDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
+            prefetch_factor=self.hparams.prefetch_factor if self.hparams.num_workers > 0 else None,
             shuffle=False,
         )
 
@@ -274,7 +274,7 @@ class ImageNetDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            prefetch_factor=self.hparams.prefetch_factor,
+            prefetch_factor=self.hparams.prefetch_factor if self.hparams.num_workers > 0 else None,
             shuffle=False,
         )
 

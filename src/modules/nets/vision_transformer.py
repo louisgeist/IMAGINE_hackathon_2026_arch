@@ -88,7 +88,7 @@ class VisionTransformer(nn.Module):
             self.registers = nn.Parameter(torch.zeros(1, self.num_registers, hidden_dim ))
         else:
             self.registers = None
-        seq_length += 1
+        seq_length += 1 + self.num_registers
 
         self.encoder = Encoder(
             seq_length,
@@ -173,15 +173,16 @@ class VisionTransformer(nn.Module):
         x = self._process_input(x)
         n = x.shape[0]
 
-        # Expand the class token to the full batch
         batch_class_token = self.class_token.expand(n, -1, -1)
-        batch_registers = self.registers.expand(n, self.num_registers, self.hidden_dim) # check clean way to do it without registers
-        x = torch.cat([batch_class_token, batch_registers, x], dim=1)
+        if self.num_registers > 0:
+            batch_registers = self.registers.expand(n, self.num_registers, self.hidden_dim)
+            x = torch.cat([batch_class_token, batch_registers, x], dim=1)
+        else:
+            x = torch.cat([batch_class_token, x], dim=1)
 
         x = self.encoder(x)
 
-        # Classifier "token" as used by standard language architectures
-        x = x[:, self.num_registers] # concatenating for now
+        x = x[:, :self.num_registers + 1].flatten(1)
 
         x = self.heads(x)
 
@@ -248,7 +249,7 @@ class EncoderBlock(nn.Module):
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
         self.self_attention = nn.MultiheadAttention(
-            hidden_dim, num_heads, dropout=attention_dropout, batch_first=True
+            hidden_dim, num_heads, dropout=attention_dropout, batch_first=True # try with bias = False ?
         )
         self.dropout = nn.Dropout(dropout)
 

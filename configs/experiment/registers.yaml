@@ -8,9 +8,9 @@ defaults:
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
-
-net:
-  num_registers: 3
+module:
+  net:
+    num_registers: 3
 
 # Remember to define experiment_name and tags in all your experiments!
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>

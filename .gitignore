@@ -20,7 +20,7 @@ logs/*
 codecarbon/*
 predictions/*
 outputs
-
+wandb/
 !data/.gitkeep
 !logs/.gitkeep
 !codecarbon/.gitkeep
