@@ -21,9 +21,9 @@ defaults:
   # debugging config (enable through command line, e.g. `python train.py debug=default)
   - debug: null
 
-team_name: ???       # TODO write your team name HERE
-experiment_name: ??? # TODO define this in your EXPERIMENT CONFIGS
-tags: ???            # TODO define this in your EXPERIMENT CONFIGS
+team_name: arch       # TODO write your team name HERE
+experiment_name: qknorm_v0 # TODO define this in your EXPERIMENT CONFIGS
+tags: train            # TODO define this in your EXPERIMENT CONFIGS
 
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
 # Second tag options: train, pre-train, post-train, debug, <custom tag>
