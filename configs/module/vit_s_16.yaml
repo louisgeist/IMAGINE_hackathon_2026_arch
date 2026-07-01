@@ -1,3 +1,6 @@
+defaults:
+  - /encoder: attention
+
 _target_: src.modules.imagenet_module.ImageNetModule
 
 optimizer:
@@ -25,8 +28,4 @@ net:
   _target_: src.modules.nets.vision_transformer.VisionTransformer
   image_size: 224
   patch_size: 16
-  num_layers: 12
-  num_heads: 6
   hidden_dim: 384
-  mlp_dim: 1536
-
