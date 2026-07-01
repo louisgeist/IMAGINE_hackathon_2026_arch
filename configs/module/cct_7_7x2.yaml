@@ -20,14 +20,14 @@ warmup_scheduler:
     start_factor: 1e-2
     total_iters: ${module.warmup_steps}
 
-# CCT-14/7x2, matches the paper's ImageNet config (~22.36M params)
+# CCT-7/7x2, hidden_dim=128 (~1.9M params)
 net:
   _target_: src.modules.nets.compact_convolutional_transformer.CompactConvolutionalTransformer
   image_size: 224
-  num_layers: 14
-  num_heads: 6
-  hidden_dim: 384
-  mlp_dim: 1152
+  num_layers: 7
+  num_heads: 4
+  hidden_dim: 128
+  mlp_dim: 256
   num_conv_layers: 2
   kernel_size: 7
   stride: 2

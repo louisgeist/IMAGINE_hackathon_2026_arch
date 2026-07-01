@@ -20,6 +20,7 @@ class Tokenizer(nn.Module):
         self,
         in_channels: int = 3,
         hidden_dim: int = 256,
+        in_planes: int = 64,
         num_conv_layers: int = 2,
         kernel_size: int = 3,
         stride: int = 1,
@@ -33,7 +34,11 @@ class Tokenizer(nn.Module):
         super().__init__()
         self.in_channels = in_channels
 
-        n_filter_list = [in_channels] + [hidden_dim] * num_conv_layers
+        # Intermediate conv layers stay at `in_planes` channels; only the last one
+        # projects to `hidden_dim`. Keeps the tokenizer cheap even for wide encoders.
+        n_filter_list = (
+            [in_channels] + [in_planes] * (num_conv_layers - 1) + [hidden_dim]
+        )
         layers: list[nn.Module] = []
         for i in range(num_conv_layers):
             layers.append(
@@ -106,6 +111,7 @@ class CompactConvolutionalTransformer(nn.Module):
         mlp_dim: int,
         num_classes: int = 1000,
         in_channels: int = 3,
+        in_planes: int = 64,
         num_conv_layers: int = 2,
         kernel_size: int = 3,
         stride: int = 1,
@@ -125,6 +131,7 @@ class CompactConvolutionalTransformer(nn.Module):
         self.tokenizer = Tokenizer(
             in_channels=in_channels,
             hidden_dim=hidden_dim,
+            in_planes=in_planes,
             num_conv_layers=num_conv_layers,
             kernel_size=kernel_size,
             stride=stride,
