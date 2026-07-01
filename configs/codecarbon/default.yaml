@@ -15,11 +15,11 @@ save_to_wandb: True
 
 # From Lightning's WandbLogger config
 wandb_kwargs:
-  name: ${logger.wandb.name}
-  group: ${logger.wandb.group}
-  entity: ${logger.wandb.entity}
-  tags: ${logger.wandb.tags}
-  save_dir: ${logger.wandb.save_dir}
-  offline: ${logger.wandb.offline}
-  id: ${logger.wandb.id}
-  project: ${logger.wandb.project}
+  name: ${oc.select:logger.wandb.name,null}
+  group: ${oc.select:logger.wandb.group,null}
+  entity: ${oc.select:logger.wandb.entity,null}
+  tags: ${oc.select:logger.wandb.tags,null}
+  save_dir: ${oc.select:logger.wandb.save_dir,null}
+  offline: ${oc.select:logger.wandb.offline,null}
+  id: ${oc.select:logger.wandb.id,null}
+  project: ${oc.select:logger.wandb.project,null}

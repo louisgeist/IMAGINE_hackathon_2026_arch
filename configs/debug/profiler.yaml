@@ -4,9 +4,26 @@
 
 defaults:
   - default
+  - override /codecarbon: null
 
 trainer:
   max_epochs: 1
-  profiler: "simple"
+  limit_train_batches: 100
+  limit_val_batches: 20
+  # profiler: "simple"
   # profiler: "advanced"
-  # profiler: "pytorch"
+  profiler: "pytorch"
+
+datamodule:
+  num_workers: 4  # restore workers — profiler times compute, not breakpoint-safety
+  prefetch_factor: null
+
+profiler:
+    _target_: lightning.pytorch.profilers.PyTorchProfiler 
+    dirpath: ${paths.output_dir}
+    with_stack: true
+    schedule:
+      _target_: torch.profiler.schedule
+      wait: 1
+      warmup: 1
+      active: 7
