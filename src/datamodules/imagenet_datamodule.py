@@ -91,6 +91,7 @@ class ImageNetDataModule(LightningDataModule):
         random_erase_prob: float = 0.0,
         batch_size: int = 64,
         num_workers: int = 4,
+        val_num_workers: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
     ) -> None:
@@ -112,7 +113,8 @@ class ImageNetDataModule(LightningDataModule):
         :param mixup_alpha: The alpha value for MixUp augmentation. Defaults to `0.0` (no MixUp).
         :param random_erase_prob: The probability of applying random erasing during training. Defaults to `0.0`.
         :param batch_size: The batch size. Defaults to `64`.
-        :param num_workers: The number of workers. Defaults to `0`.
+        :param num_workers: The number of training dataloader workers. Defaults to `4`.
+        :param val_num_workers: The number of validation dataloader workers. Defaults to `4`.
         :param prefetch_factor: The number of batches to prefetch. Defaults to `2`.
         :param pin_memory: Whether to pin memory. Defaults to `False`.
         """
@@ -258,7 +260,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.val_num_workers,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
