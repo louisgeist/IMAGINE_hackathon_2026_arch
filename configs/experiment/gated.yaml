@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+- override /datamodule: jpeg
+
+module:
+  net:
+    encoder:
+      gating: true
+
+datamodule:
+  prefetch_factor: 2
+
+experiment_name: "gated_attention"
+tags: ["final", "train"]

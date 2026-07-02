@@ -12,6 +12,8 @@ from typing import Any, Callable, NamedTuple, Optional, Sequence, Union
 import torch
 import torch.nn as nn
 
+from src.modules.nets.attention import Attention
+
 
 class ConvStemConfig(NamedTuple):
     out_channels: int
@@ -179,11 +181,10 @@ class Encoder(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
+        gating: bool = False,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
-        # Note that batch_size is on the first dim because
-        # we have batch_first=True in nn.MultiAttention() by default
         self.pos_embedding = nn.Parameter(
             torch.empty(1, seq_length, hidden_dim).normal_(std=0.02)
         )  # from BERT
@@ -196,6 +197,7 @@ class Encoder(nn.Module):
                 mlp_dim,
                 dropout,
                 attention_dropout,
+                gating,
                 norm_layer,
             )
         self.layers = nn.Sequential(layers)
@@ -219,6 +221,7 @@ class EncoderBlock(nn.Module):
         mlp_dim: int,
         dropout: float,
         attention_dropout: float,
+        gating: bool = False,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
     ):
         super().__init__()
@@ -226,8 +229,12 @@ class EncoderBlock(nn.Module):
 
         # Attention block
         self.ln_1 = norm_layer(hidden_dim)
-        self.self_attention = nn.MultiheadAttention(
-            hidden_dim, num_heads, dropout=attention_dropout, batch_first=True
+        self.self_attention = Attention(
+            hidden_dim,
+            num_heads,
+            gating=gating,
+            attn_dropout=attention_dropout,
+            proj_dropout=dropout,
         )
         self.dropout = nn.Dropout(dropout)
 
@@ -240,7 +247,7 @@ class EncoderBlock(nn.Module):
             input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}"
         )
         x = self.ln_1(input)
-        x, _ = self.self_attention(x, x, x, need_weights=False)
+        x = self.self_attention(x)
         x = self.dropout(x)
         x = x + input
 

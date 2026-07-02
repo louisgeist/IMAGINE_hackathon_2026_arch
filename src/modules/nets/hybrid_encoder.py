@@ -43,6 +43,7 @@ class HybridEncoder(nn.Module):
         n_groups: int,
         pom_degree: int,
         pom_expansion: int,
+        gating: bool = False,
         window_size: int = 7,
         shift_size: int = 0,
         grid_size: Optional[int] = None,
@@ -66,6 +67,7 @@ class HybridEncoder(nn.Module):
                     mlp_dim,
                     dropout,
                     attention_dropout,
+                    gating,
                     norm_layer,
                 )
             elif layer_type == "local_attention":
