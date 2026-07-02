@@ -131,6 +131,20 @@ uv run src/train.py
 ```
 with any Hydra command-line overrides that you need for your experiment.
 
+### Positional Embeddings
+For the original embedding :
+```bash
+uv run src/train.py module.net.pos_embedding_type=learned
+```
+For the sincos embedding : 
+```bash
+uv run src/train.py module.net.pos_embedding_type=sincos
+```
+for ROPE embedding (the most performant) :
+```bash
+uv run src/train.py module.net.pos_embedding_type=rope
+```
+
 ## ✅ Evaluation
 Once the test set has been released, complete the [eval config](./configs/eval.yaml) with your selected **checkpoints** and your **team name**, then run:
 ```bash
