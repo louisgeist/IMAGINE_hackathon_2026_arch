@@ -131,6 +131,12 @@ uv run src/train.py
 ```
 with any Hydra command-line overrides that you need for your experiment.
 
+
+To use the VIT Base run it with this command : 
+```bash
+uv run src/train.py module=vit_b_16 experiment_name=<name>
+```
+
 ## ✅ Evaluation
 Once the test set has been released, complete the [eval config](./configs/eval.yaml) with your selected **checkpoints** and your **team name**, then run:
 ```bash
