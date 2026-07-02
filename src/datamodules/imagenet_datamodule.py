@@ -90,9 +90,11 @@ class ImageNetDataModule(LightningDataModule):
         mixup_alpha: float = 0.0,
         random_erase_prob: float = 0.0,
         batch_size: int = 64,
-        num_workers: int = 4,
+        num_workers_train: int = 4,
+        num_workers_val: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
+        persistent_workers: bool = False
     ) -> None:
         """Initialize an `ImageNetDataModule`.
 
@@ -243,11 +245,12 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_train,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self.collate_fn,
             shuffle=True,
+            persistent_workers=self.hparams.persistent_workers
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -258,7 +261,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_val,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
