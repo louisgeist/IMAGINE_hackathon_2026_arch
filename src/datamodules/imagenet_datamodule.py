@@ -90,9 +90,11 @@ class ImageNetDataModule(LightningDataModule):
         mixup_alpha: float = 0.0,
         random_erase_prob: float = 0.0,
         batch_size: int = 64,
-        num_workers: int = 4,
+        num_workers_train: int = 4,
+        num_workers_val: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
+        persistent_workers: bool = False,
     ) -> None:
         """Initialize an `ImageNetDataModule`.
 
@@ -136,10 +138,14 @@ class ImageNetDataModule(LightningDataModule):
         if auto_augment_policy is not None:
             if auto_augment_policy == "ra":
                 train_transforms.append(
-                    T.RandAugment(interpolation=interpolation_mode, magnitude=ra_magnitude)
+                    T.RandAugment(
+                        interpolation=interpolation_mode, magnitude=ra_magnitude
+                    )
                 )
             elif auto_augment_policy == "ta_wide":
-                train_transforms.append(T.TrivialAugmentWide(interpolation=interpolation_mode))
+                train_transforms.append(
+                    T.TrivialAugmentWide(interpolation=interpolation_mode)
+                )
             elif auto_augment_policy == "augmix":
                 train_transforms.append(
                     T.AugMix(interpolation=interpolation_mode, severity=augmix_severity)
@@ -243,11 +249,12 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_train,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self.collate_fn,
             shuffle=True,
+            persistent_workers=self.hparams.persistent_workers,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -258,7 +265,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_val,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
@@ -312,9 +319,13 @@ class ImageNetDataModule(LightningDataModule):
     def _get_mixup_cutmix(self, mixup_alpha, cutmix_alpha):
         mixup_cutmix = []
         if mixup_alpha > 0:
-            mixup_cutmix.append(T.MixUp(alpha=mixup_alpha, num_classes=self.num_classes))
+            mixup_cutmix.append(
+                T.MixUp(alpha=mixup_alpha, num_classes=self.num_classes)
+            )
         if cutmix_alpha > 0:
-            mixup_cutmix.append(T.CutMix(alpha=cutmix_alpha, num_classes=self.num_classes))
+            mixup_cutmix.append(
+                T.CutMix(alpha=cutmix_alpha, num_classes=self.num_classes)
+            )
         if not mixup_cutmix:
             return None
 
