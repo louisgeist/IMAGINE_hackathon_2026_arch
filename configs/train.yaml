@@ -22,7 +22,7 @@ defaults:
   - debug: null
 
 team_name: arch       # TODO write your team name HERE
-experiment_name: qknorm_v0 # TODO define this in your EXPERIMENT CONFIGS
+experiment_name: swiglu # TODO define this in your EXPERIMENT CONFIGS
 tags: train            # TODO define this in your EXPERIMENT CONFIGS
 
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>

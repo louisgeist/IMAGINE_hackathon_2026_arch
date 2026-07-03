@@ -40,6 +40,7 @@ class VisionTransformer(nn.Module):
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         conv_stem_configs: Optional[list[ConvStemConfig]] = None,
         use_qk_norm: bool = False,
+        use_swiglu: bool = False,
     ):
         super().__init__()
         torch._assert(image_size % patch_size == 0, "Input shape indivisible by patch size!")
@@ -53,6 +54,7 @@ class VisionTransformer(nn.Module):
         self.representation_size = representation_size
         self.norm_layer = norm_layer
         self.use_qk_norm = use_qk_norm
+        self.use_swiglu = use_swiglu
 
         if conv_stem_configs is not None:
             # As per https://arxiv.org/abs/2106.14881
@@ -97,6 +99,7 @@ class VisionTransformer(nn.Module):
             attention_dropout,
             norm_layer,
             use_qk_norm,
+            use_swiglu,
         )
         self.seq_length = seq_length
 
@@ -199,6 +202,7 @@ class Encoder(nn.Module):
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         use_qk_norm: bool = False,
+        use_swiglu: bool = False,
     ):
         super().__init__()
         # Note that batch_size is on the first dim because
@@ -217,6 +221,7 @@ class Encoder(nn.Module):
                 attention_dropout,
                 norm_layer,
                 use_qk_norm,
+                use_swiglu,
             )
         self.layers = nn.Sequential(layers)
         self.ln = norm_layer(hidden_dim)
@@ -324,6 +329,7 @@ class EncoderBlock(nn.Module):
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         use_qk_norm: bool = False,
+        use_swiglu: bool = False,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -337,7 +343,11 @@ class EncoderBlock(nn.Module):
 
         # MLP block
         self.ln_2 = norm_layer(hidden_dim)
-        self.mlp = MLPBlock(hidden_dim, mlp_dim, dropout)
+        self.mlp = (
+            SwiGLUMLPBlock(hidden_dim, mlp_dim, dropout)
+            if use_swiglu
+            else MLPBlock(hidden_dim, mlp_dim, dropout)
+        )
 
     def forward(self, input: torch.Tensor):
         torch._assert(
@@ -443,6 +453,35 @@ class MLPBlock(MLP):
             unexpected_keys,
             error_msgs,
         )
+
+
+class SwiGLUMLPBlock(nn.Module):
+    """Transformer MLP block with a SwiGLU gated activation.
+
+    Replaces the standard two-matrix GELU MLP with a gated linear unit:
+    ``out = W_down( SiLU(W_gate x) * W_up x )``. This uses three projection
+    matrices instead of two, so to keep the parameter count comparable to the
+    GELU MLP set ``mlp_dim`` to ~2/3 of the GELU hidden dim (e.g. 1024 vs 1536).
+    """
+
+    def __init__(self, in_dim: int, mlp_dim: int, dropout: float):
+        super().__init__()
+        self.w_gate = nn.Linear(in_dim, mlp_dim)
+        self.w_up = nn.Linear(in_dim, mlp_dim)
+        self.w_down = nn.Linear(mlp_dim, in_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Match MLPBlock's initialization for comparability.
+        for m in (self.w_gate, self.w_up, self.w_down):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.normal_(m.bias, std=1e-6)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.silu(self.w_gate(x)) * self.w_up(x)
+        x = self.dropout(x)
+        x = self.w_down(x)
+        return self.dropout(x)
 
 
 class ConvNormActivation(torch.nn.Sequential):

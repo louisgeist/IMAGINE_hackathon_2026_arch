@@ -4,7 +4,8 @@ train_dir: 'train'
 val_dir: 'val'
 test_dir: 'test'
 batch_size: 512 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
-num_workers: 16
+num_workers_train: 16
+num_workers_val: 4
 prefetch_factor: 2
 pin_memory: True
 eval_resize_size: 256

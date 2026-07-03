@@ -28,6 +28,7 @@ net:
   num_layers: 12
   num_heads: 6
   hidden_dim: 384
-  mlp_dim: 1536
-  use_qk_norm: true
+  mlp_dim: 1024 # 2/3 of 1536 to keep params comparable under SwiGLU (3 matrices)
+  use_qk_norm: false
+  use_swiglu: true
 
