@@ -5,27 +5,13 @@ import collections
 import math
 import warnings
 from collections import OrderedDict
-from functools import lru_cache, partial
+from functools import partial
 from itertools import repeat
 from typing import Any, Callable, NamedTuple, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
-
-
-@lru_cache(maxsize=None)
-def _nested_order(n: int) -> tuple[int, ...]:
-    """Bit-reversal order of [0, n): any prefix is evenly spread, and prefixes are nested
-    (the coords for a smaller prefix are a subset of those for a larger one)."""
-    bits = max(1, (n - 1).bit_length())
-    return tuple(r for i in range(1 << bits) if (r := int(f"{i:0{bits}b}"[::-1], 2)) < n)
-
-
-def _grid_keep_indices(n_side: int, num_keep: int, device: torch.device) -> torch.Tensor:
-    """Flat indices of a nested n_side x n_side grid, kept count close to num_keep."""
-    keep_side = max(1, min(n_side, round(num_keep**0.5)))
-    coords = torch.tensor(_nested_order(n_side)[:keep_side], device=device)
-    return (coords.unsqueeze(1) * n_side + coords.unsqueeze(0)).flatten()
+import torch.nn.functional as F
 
 
 class ConvStemConfig(NamedTuple):
@@ -36,6 +22,59 @@ class ConvStemConfig(NamedTuple):
     activation_layer: Callable[..., nn.Module] = nn.ReLU
 
 
+class GMRConv2d(nn.Module):
+    """Gaussian Mixture Ring convolution (GMR-Conv, arXiv:2504.02819): kernels are weighted
+    sums of concentric Gaussian rings, hence radially symmetric and equivariant to rotations
+    and reflections. Used by Equi-ViT (arXiv:2601.09130) as an equivariant patch stem."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        padding: int = 0,
+        num_rings: Optional[int] = None,
+        sigma: float = 0.5,
+    ):
+        super().__init__()
+        self.stride = stride
+        self.padding = padding
+        num_rings = num_rings or (kernel_size + 1) // 2
+        coords = torch.arange(kernel_size, dtype=torch.float32) - (kernel_size - 1) / 2
+        radius = (coords[None, :] ** 2 + coords[:, None] ** 2).sqrt()
+        mus = torch.linspace(0, (kernel_size - 1) / 2, num_rings)
+        basis = torch.exp(-((radius[None] - mus[:, None, None]) ** 2) / (2 * sigma**2))
+        basis = basis / basis.sum(dim=(-2, -1), keepdim=True)
+        self.register_buffer("basis", basis)  # (num_rings, k, k)
+        self.weight = nn.Parameter(torch.empty(out_channels, in_channels, num_rings))
+        self.bias = nn.Parameter(torch.zeros(out_channels))
+        nn.init.trunc_normal_(self.weight, std=math.sqrt(1 / (in_channels * num_rings)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        kernel = torch.einsum("oir,rhw->oihw", self.weight, self.basis)
+        return nn.functional.conv2d(x, kernel, self.bias, stride=self.stride, padding=self.padding)
+
+
+class MirrorSymConv2d(nn.Module):
+    """Conv2d with kernels symmetric (so equivariant) under horizontal flips."""
+
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int):
+        super().__init__()
+        self.stride = stride
+        self.kernel_size = kernel_size
+        # store the left half (incl. center column if odd), mirror it to build the full kernel
+        self.weight = nn.Parameter(
+            torch.empty(out_channels, in_channels, kernel_size, (kernel_size + 1) // 2)
+        )
+        self.bias = nn.Parameter(torch.zeros(out_channels))
+        nn.init.trunc_normal_(self.weight, std=math.sqrt(1 / (in_channels * kernel_size**2)))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        kernel = torch.cat([self.weight, self.weight[..., : self.kernel_size // 2].flip(-1)], dim=-1)
+        return nn.functional.conv2d(x, kernel, self.bias, stride=self.stride)
+
+
 class VisionTransformer(nn.Module):
     """Vision Transformer as per https://arxiv.org/abs/2010.11929."""
 
@@ -43,26 +82,20 @@ class VisionTransformer(nn.Module):
         self,
         image_size: int,
         patch_size: int,
-        num_layers: int,
-        num_heads: int,
         hidden_dim: int,
-        mlp_dim: int,
+        encoder: Callable[..., nn.Module],
         dropout: float = 0.0,
-        attention_dropout: float = 0.0,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         conv_stem_configs: Optional[list[ConvStemConfig]] = None,
-        patch_drop_rate: float = 0.0,
-        patch_drop_mode: str = "random",
+        patch_stem: str = "patchify",
     ):
         super().__init__()
         torch._assert(image_size % patch_size == 0, "Input shape indivisible by patch size!")
         self.image_size = image_size
         self.patch_size = patch_size
         self.hidden_dim = hidden_dim
-        self.mlp_dim = mlp_dim
-        self.attention_dropout = attention_dropout
         self.dropout = dropout
         self.num_classes = num_classes
         self.representation_size = representation_size
@@ -90,6 +123,16 @@ class VisionTransformer(nn.Module):
                 nn.Conv2d(in_channels=prev_channels, out_channels=hidden_dim, kernel_size=1),
             )
             self.conv_proj: nn.Module = seq_proj
+        elif patch_stem == "gmr":
+            # Equi-ViT's best config: two GMR convs [6, 11]; strides 4x4 = patch_size 16
+            torch._assert(patch_size == 16, "GMR stem strides assume patch_size 16")
+            self.conv_proj = nn.Sequential(
+                GMRConv2d(3, hidden_dim // 4, kernel_size=6, stride=4, padding=1),
+                nn.GELU(),
+                GMRConv2d(hidden_dim // 4, hidden_dim, kernel_size=11, stride=4, padding=4),
+            )
+        elif patch_stem == "mirror":
+            self.conv_proj = MirrorSymConv2d(3, hidden_dim, kernel_size=patch_size, stride=patch_size)
         else:
             self.conv_proj = nn.Conv2d(
                 in_channels=3, out_channels=hidden_dim, kernel_size=patch_size, stride=patch_size
@@ -101,18 +144,7 @@ class VisionTransformer(nn.Module):
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         seq_length += 1
 
-        self.encoder = Encoder(
-            seq_length,
-            num_layers,
-            num_heads,
-            hidden_dim,
-            mlp_dim,
-            dropout,
-            attention_dropout,
-            norm_layer,
-            patch_drop_rate,
-            patch_drop_mode,
-        )
+        self.encoder = encoder(seq_length=seq_length, hidden_dim=hidden_dim)
         self.seq_length = seq_length
 
         heads_layers: OrderedDict[str, nn.Module] = OrderedDict()
@@ -135,9 +167,7 @@ class VisionTransformer(nn.Module):
             nn.init.trunc_normal_(self.conv_proj.weight, std=math.sqrt(1 / fan_in))
             if self.conv_proj.bias is not None:
                 nn.init.zeros_(self.conv_proj.bias)
-        elif self.conv_proj.conv_last is not None and isinstance(
-            self.conv_proj.conv_last, nn.Conv2d
-        ):
+        elif isinstance(getattr(self.conv_proj, "conv_last", None), nn.Conv2d):
             # Init the last 1x1 conv of the conv stem
             nn.init.normal_(
                 self.conv_proj.conv_last.weight,
@@ -200,6 +230,105 @@ class VisionTransformer(nn.Module):
         return x
 
 
+def build_2d_sincos_pos_embedding(
+    seq_length: int, hidden_dim: int, has_class_token: bool = True, temperature: float = 10000.0
+) -> torch.Tensor:
+    """Fixed 2D sine-cosine positional embedding (as in MAE / DeiT-III).
+
+    Returns a (1, seq_length, hidden_dim) tensor. When ``has_class_token`` is True the first
+    position is left as zeros to align with the prepended ``[CLS]`` token.
+    """
+    n_patches = seq_length - 1 if has_class_token else seq_length
+    grid = int(math.isqrt(n_patches))
+    torch._assert(grid * grid == n_patches, "sincos pos-embed requires a square patch grid")
+    torch._assert(hidden_dim % 4 == 0, "hidden_dim must be divisible by 4 for 2D sincos")
+    gy, gx = torch.meshgrid(torch.arange(grid), torch.arange(grid), indexing="ij")
+    dim4 = hidden_dim // 4
+    omega = 1.0 / (temperature ** (torch.arange(dim4) / dim4))
+    ox = gx.flatten()[:, None] * omega[None, :]
+    oy = gy.flatten()[:, None] * omega[None, :]
+    pe = torch.cat([ox.sin(), ox.cos(), oy.sin(), oy.cos()], dim=1)  # (n_patches, hidden_dim)
+    if has_class_token:
+        pe = torch.cat([torch.zeros(1, hidden_dim), pe], dim=0)
+    return pe.unsqueeze(0)  # (1, seq_length, hidden_dim)
+
+
+class RotaryEmbedding(nn.Module):
+    """1D Rotary Position Embedding (RoPE) from RoFormer (Su et al., 2021, arXiv:2104.09864).
+
+    Precomputes cos/sin tables for a fixed sequence length and rotates query/key tensors of
+    shape ``(batch, num_heads, seq_length, head_dim)``. Token 0 (the ``[CLS]`` token) sits at
+    position 0, where the rotation angle is 0, i.e. it is left unrotated.
+
+    This uses the half-split ("rotate_half") formulation popularised by GPT-NeoX/LLaMA, which
+    is equivalent to the paper's block-diagonal rotation matrix up to a fixed permutation of
+    the (learned) channel dimensions, and preserves RoPE's defining relative-position property
+    ``<f(q, m), f(k, n)>`` depending only on ``m - n``.
+    """
+
+    def __init__(self, head_dim: int, seq_length: int, base: float = 10000.0):
+        super().__init__()
+        torch._assert(head_dim % 2 == 0, "RoPE requires an even head dimension")
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))  # (head_dim/2,)
+        positions = torch.arange(seq_length).float()  # (seq_length,)
+        freqs = torch.outer(positions, inv_freq)  # (seq_length, head_dim/2)
+        emb = torch.cat([freqs, freqs], dim=-1)  # (seq_length, head_dim)
+        # (1, 1, seq_length, head_dim) so it broadcasts over batch and heads.
+        self.register_buffer("cos", emb.cos()[None, None], persistent=False)
+        self.register_buffer("sin", emb.sin()[None, None], persistent=False)
+
+    @staticmethod
+    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+        x1, x2 = x.chunk(2, dim=-1)
+        return torch.cat([-x2, x1], dim=-1)
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # Cast tables to the (possibly fp16 under AMP) dtype of q/k to keep SDPA inputs consistent.
+        cos = self.cos.to(dtype=q.dtype)
+        sin = self.sin.to(dtype=q.dtype)
+        q_rot = q * cos + self._rotate_half(q) * sin
+        k_rot = k * cos + self._rotate_half(k) * sin
+        return q_rot, k_rot
+
+
+class RoPESelfAttention(nn.Module):
+    """Multi-head self-attention with rotary position embedding applied to Q and K.
+
+    Mirrors ``nn.MultiheadAttention`` (fused QKV projection + output projection, batch_first)
+    but exposes Q/K so RoPE can be injected before the scaled dot-product.
+    """
+
+    def __init__(
+        self, hidden_dim: int, num_heads: int, attention_dropout: float, rotary: RotaryEmbedding
+    ):
+        super().__init__()
+        torch._assert(hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads")
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        self.attention_dropout = attention_dropout
+        self.rotary = rotary
+        self.in_proj = nn.Linear(hidden_dim, 3 * hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.in_proj.weight)
+        nn.init.zeros_(self.in_proj.bias)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, n, c = x.shape
+        # (b, n, 3*c) -> (3, b, num_heads, n, head_dim)
+        qkv = self.in_proj(x).reshape(b, n, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]  # each (b, num_heads, n, head_dim)
+        q, k = self.rotary(q, k)
+        dropout_p = self.attention_dropout if self.training else 0.0
+        out = nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        out = out.transpose(1, 2).reshape(b, n, c)  # (b, n, c)
+        return self.out_proj(out)
+
+
 class Encoder(nn.Module):
     """Transformer Model Encoder for sequence to sequence translation."""
 
@@ -213,18 +342,35 @@ class Encoder(nn.Module):
         dropout: float,
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
-        patch_drop_rate: float = 0.0,
-        patch_drop_mode: str = "random",
+        use_qk_norm: bool = False,
+        use_swiglu: bool = False,
+        pos_embedding_type: str = "learned",
     ):
         super().__init__()
         # Note that batch_size is on the first dim because
         # we have batch_first=True in nn.MultiAttention() by default
-        self.pos_embedding = nn.Parameter(
-            torch.empty(1, seq_length, hidden_dim).normal_(std=0.02)
-        )  # from BERT
+        self.rotary: Optional[RotaryEmbedding] = None
+        if pos_embedding_type == "learned":
+            self.pos_embedding = nn.Parameter(
+                torch.empty(1, seq_length, hidden_dim).normal_(std=0.02)
+            )  # from BERT
+        elif pos_embedding_type == "sincos":
+            # Fixed (non-learnable) 2D sine-cosine embedding.
+            self.register_buffer(
+                "pos_embedding",
+                build_2d_sincos_pos_embedding(seq_length, hidden_dim, has_class_token=True),
+                persistent=False,
+            )
+        elif pos_embedding_type == "rope":
+            # Rotary embedding is applied inside attention; no additive positional term is used.
+            self.pos_embedding = None
+            self.rotary = RotaryEmbedding(hidden_dim // num_heads, seq_length)
+        else:
+            raise ValueError(
+                f"Unknown pos_embedding_type={pos_embedding_type!r}; "
+                "expected 'learned', 'sincos' or 'rope'"
+            )
         self.dropout = nn.Dropout(dropout)
-        self.patch_drop_rate = patch_drop_rate
-        self.patch_drop_mode = patch_drop_mode
         layers: OrderedDict[str, nn.Module] = OrderedDict()
         for i in range(num_layers):
             layers[f"encoder_layer_{i}"] = EncoderBlock(
@@ -234,6 +380,9 @@ class Encoder(nn.Module):
                 dropout,
                 attention_dropout,
                 norm_layer,
+                use_qk_norm,
+                use_swiglu,
+                rotary=self.rotary,
             )
         self.layers = nn.Sequential(layers)
         self.ln = norm_layer(hidden_dim)
@@ -242,21 +391,92 @@ class Encoder(nn.Module):
         torch._assert(
             input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}"
         )
-        input = input + self.pos_embedding
-
-        if self.training and self.patch_drop_rate > 0:
-            cls_token, patches = input[:, :1], input[:, 1:]
-            num_keep = max(1, int(patches.shape[1] * (1 - self.patch_drop_rate)))
-            if self.patch_drop_mode == "grid":
-                # deterministic, evenly-spaced patches (like downsampling resolution), same for every sample
-                keep_idx = _grid_keep_indices(n_side, num_keep, patches.device)
-                keep_idx = keep_idx.unsqueeze(0).expand(patches.shape[0], -1)
-            else:
-                keep_idx = torch.rand(patches.shape[:2], device=patches.device).argsort(dim=1)[:, :num_keep]
-            patches = torch.gather(patches, 1, keep_idx.unsqueeze(-1).expand(-1, -1, patches.shape[-1]))
-            input = torch.cat([cls_token, patches], dim=1)
-
+        if self.pos_embedding is not None:
+            input = input + self.pos_embedding
         return self.ln(self.layers(self.dropout(input)))
+
+
+class RMSNorm(nn.Module):
+    """Root mean square layer normalization, as used in Qwen for QK-Norm.
+
+    Normalizes over the last dimension (the per-head dimension here) and applies
+    a learned per-element scale. The reduction is done in fp32 for numerical
+    stability under mixed precision, then cast back to the input dtype so the
+    downstream Flash Attention kernel still receives fp16/bf16 tensors.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x * self.weight).to(dtype)
+
+
+class QKNormAttention(nn.Module):
+    """Multi-head self-attention with optional Qwen-style QK-Norm.
+
+    Drop-in replacement for ``nn.MultiheadAttention`` (batch_first, self-attention
+    only). When ``use_qk_norm`` is True, RMSNorm is applied to the queries and keys
+    over the per-head dimension before the dot product. Attention itself is computed
+    with ``F.scaled_dot_product_attention`` so the Flash Attention backend (forced in
+    ``train.py``) is preserved.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        attention_dropout: float,
+        use_qk_norm: bool = True,
+    ):
+        super().__init__()
+        torch._assert(
+            hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
+        )
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        self.attention_dropout = attention_dropout
+
+        self.in_proj = nn.Linear(hidden_dim, 3 * hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        # A single set of head_dim weights, shared across all heads.
+        self.q_norm = RMSNorm(self.head_dim) if use_qk_norm else nn.Identity()
+        self.k_norm = RMSNorm(self.head_dim) if use_qk_norm else nn.Identity()
+
+        # Match nn.MultiheadAttention's initialization for comparability.
+        nn.init.xavier_uniform_(self.in_proj.weight)
+        nn.init.zeros_(self.in_proj.bias)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        # (B, N, 3 * C) -> (B, N, 3, num_heads, head_dim)
+        qkv = self.in_proj(x).reshape(B, N, 3, self.num_heads, self.head_dim)
+        q, k, v = qkv.unbind(2)  # each (B, N, num_heads, head_dim)
+
+        q = self.q_norm(q)  # Qwen QK-Norm over head_dim
+        k = self.k_norm(k)
+
+        # (B, N, num_heads, head_dim) -> (B, num_heads, N, head_dim)
+        q, k, v = (t.transpose(1, 2) for t in (q, k, v))
+
+        x = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+        )
+
+        # (B, num_heads, N, head_dim) -> (B, N, C)
+        x = x.transpose(1, 2).reshape(B, N, C)
+        return self.out_proj(x)
 
 
 class EncoderBlock(nn.Module):
@@ -270,27 +490,41 @@ class EncoderBlock(nn.Module):
         dropout: float,
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
+        use_qk_norm: bool = False,
+        use_swiglu: bool = False,
+        rotary: Optional[RotaryEmbedding] = None,
     ):
         super().__init__()
         self.num_heads = num_heads
 
-        # Attention block
+        # Attention block. With a rotary embedding Q/K are rotated inside attention, so we use
+        # a rotary-aware implementation instead of QKNormAttention.
         self.ln_1 = norm_layer(hidden_dim)
-        self.self_attention = nn.MultiheadAttention(
-            hidden_dim, num_heads, dropout=attention_dropout, batch_first=True
-        )
+        if rotary is not None:
+            torch._assert(not use_qk_norm, "RoPE attention does not support QK-Norm yet")
+            self.self_attention = RoPESelfAttention(
+                hidden_dim, num_heads, attention_dropout, rotary
+            )
+        else:
+            self.self_attention = QKNormAttention(
+                hidden_dim, num_heads, attention_dropout, use_qk_norm=use_qk_norm
+            )
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
         self.ln_2 = norm_layer(hidden_dim)
-        self.mlp = MLPBlock(hidden_dim, mlp_dim, dropout)
+        self.mlp = (
+            SwiGLUMLPBlock(hidden_dim, mlp_dim, dropout)
+            if use_swiglu
+            else MLPBlock(hidden_dim, mlp_dim, dropout)
+        )
 
     def forward(self, input: torch.Tensor):
         torch._assert(
             input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}"
         )
         x = self.ln_1(input)
-        x, _ = self.self_attention(x, x, x, need_weights=False)
+        x = self.self_attention(x)
         x = self.dropout(x)
         x = x + input
 
@@ -389,6 +623,35 @@ class MLPBlock(MLP):
             unexpected_keys,
             error_msgs,
         )
+
+
+class SwiGLUMLPBlock(nn.Module):
+    """Transformer MLP block with a SwiGLU gated activation.
+
+    Replaces the standard two-matrix GELU MLP with a gated linear unit:
+    ``out = W_down( SiLU(W_gate x) * W_up x )``. This uses three projection
+    matrices instead of two, so to keep the parameter count comparable to the
+    GELU MLP set ``mlp_dim`` to ~2/3 of the GELU hidden dim (e.g. 1024 vs 1536).
+    """
+
+    def __init__(self, in_dim: int, mlp_dim: int, dropout: float):
+        super().__init__()
+        self.w_gate = nn.Linear(in_dim, mlp_dim)
+        self.w_up = nn.Linear(in_dim, mlp_dim)
+        self.w_down = nn.Linear(mlp_dim, in_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Match MLPBlock's initialization for comparability.
+        for m in (self.w_gate, self.w_up, self.w_down):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.normal_(m.bias, std=1e-6)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.silu(self.w_gate(x)) * self.w_up(x)
+        x = self.dropout(x)
+        x = self.w_down(x)
+        return self.dropout(x)
 
 
 class ConvNormActivation(torch.nn.Sequential):

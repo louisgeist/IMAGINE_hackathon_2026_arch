@@ -1,0 +1,10 @@
+# @package _global_.module.net.encoder
+_target_: src.modules.nets.vision_transformer.Encoder
+_partial_: true
+num_layers: 12
+num_heads: 6
+mlp_dim: 1024 # 2/3 of 1536 to keep params comparable under SwiGLU (3 matrices)
+dropout: 0.0
+attention_dropout: 0.0
+use_qk_norm: false
+use_swiglu: true

@@ -103,18 +103,47 @@ class ImageNetModule(LightningModule):
         self.val_acc1.reset()
         self.val_acc5.reset()
 
-    def on_train_epoch_start(self) -> None:
-        """Anneal the patch drop rate from high to low, reaching the end value at
-        `patch_drop_rate_end_epoch`.
-        Only updated every `patch_drop_update_every` epochs, to avoid torch.compile every single epoch."""
-        if self.current_epoch % self.hparams.patch_drop_update_every != 0:
-            return
-        progress = min(self.current_epoch / self.hparams.patch_drop_rate_end_epoch, 1.0)
+        net = getattr(self.net, "_orig_mod", self.net)
+        if (
+            self.hparams.compile
+            and hasattr(net, "patch_drop_rate")
+            and self.hparams.patch_drop_rate_start != self.hparams.patch_drop_rate_end
+        ):
+            self._warmup_patch_drop_shapes(net)
+
+    def _patch_drop_rate_at(self, epoch: int) -> float:
+        progress = min(epoch / self.hparams.patch_drop_rate_end_epoch, 1.0)
         if self.hparams.patch_drop_schedule == "cosine":
             progress = 0.5 * (1 - math.cos(math.pi * progress))
-        self.net.encoder.patch_drop_rate = self.hparams.patch_drop_rate_start + progress * (
+        return self.hparams.patch_drop_rate_start + progress * (
             self.hparams.patch_drop_rate_end - self.hparams.patch_drop_rate_start
         )
+
+    def _warmup_patch_drop_shapes(self, net) -> None:
+        """Run a dummy forward+backward for every sequence length the patch drop schedule will
+        use, so torch.compile recompiles happen once here instead of stalling mid-training."""
+        batch_size = self.trainer.datamodule.batch_size_per_device
+        x = torch.randn(batch_size, 3, net.image_size, net.image_size, device=self.device)
+        y = torch.zeros(batch_size, dtype=torch.long, device=self.device)
+        end_epoch = self.hparams.patch_drop_rate_end_epoch
+        epochs = range(0, end_epoch + 1, self.hparams.patch_drop_update_every)
+        for epoch in {*epochs, end_epoch}:
+            net.patch_drop_rate = self._patch_drop_rate_at(epoch)
+            with self.trainer.precision_plugin.forward_context():
+                loss = self.criterion(self.forward(x), y)
+            loss.backward()
+        self.zero_grad(set_to_none=True)
+
+    def on_train_epoch_start(self) -> None:
+        """Anneal the patch drop rate from high to low, reaching the end value at
+        `patch_drop_rate_end_epoch`. No-op unless the net is a PatchDropVisionTransformer.
+        Only updated every `patch_drop_update_every` epochs, to avoid torch.compile every single epoch."""
+        net = getattr(self.net, "_orig_mod", self.net)  # unwrap torch.compile
+        if not hasattr(net, "patch_drop_rate"):
+            return
+        if self.current_epoch % self.hparams.patch_drop_update_every != 0:
+            return
+        net.patch_drop_rate = self._patch_drop_rate_at(self.current_epoch)
 
     def model_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor]
