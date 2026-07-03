@@ -8,7 +8,16 @@ from itertools import repeat
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.init import trunc_normal_
+
+
+_SDPA_BACKENDS = [
+    SDPBackend.FLASH_ATTENTION,
+    SDPBackend.EFFICIENT_ATTENTION,
+    SDPBackend.MATH,
+]
 
 
 def _ntuple(n):
@@ -32,6 +41,28 @@ def drop_path(x, drop_prob: float = 0.0, training: bool = False):
     random_tensor.floor_()
     output = x.div(keep_prob) * random_tensor
     return output
+
+
+def _manual_scaled_dot_product_attention(q, k, v, scale, attn_drop):
+    attn = (q @ k.transpose(-2, -1)) * scale
+    attn = attn.softmax(dim=-1)
+    attn = attn_drop(attn)
+    return attn @ v
+
+
+def _scaled_dot_product_attention(q, k, v, scale, attn_drop, training):
+    dropout_p = attn_drop.p if training else 0.0
+    try:
+        with sdpa_kernel(_SDPA_BACKENDS):
+            return F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                dropout_p=dropout_p,
+                scale=scale,
+            )
+    except RuntimeError:
+        return _manual_scaled_dot_product_attention(q, k, v, scale, attn_drop)
 
 
 class DropPath(nn.Module):
@@ -148,12 +179,17 @@ class IWSA(nn.Module):
         v_shape_inter = self.win2img(v, H, W) # shape=(B, C, H, W)
         v_info_inter = self.lim(v_shape_inter, self.lim_func)  # shape=(B, N, C)
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # shape=(B, h_g*w_g, n_head, ws*ws, ws*ws)
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+        attn = _scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            self.scale,
+            self.attn_drop,
+            self.training,
+        )
         # shape: (B, h_g*w_g, num_heads, ws*ws, head_dim) -> (B, h_g*w_g, ws*ws, num_heads, head_dim)
         # -> (B, h_g, w_g, ws, ws, num_heads*head_dim)
-        attn = (attn @ v).transpose(2, 3).reshape(B, h_group, w_group, self.ws, self.ws, C)
+        attn = attn.transpose(2, 3).reshape(B, h_group, w_group, self.ws, self.ws, C)
         x = attn.transpose(2, 3).reshape(B, N, C)
         x = x + v_info_inter
         x = self.proj(x)
@@ -221,11 +257,15 @@ class SSA(nn.Module):
             kv = self.kv(x).reshape(B, -1, 2, self.num_heads, int(C / self.num_heads)).permute(2, 0, 3, 1, 4)
             k, v = kv[0], kv[1]
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = _scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            self.scale,
+            self.attn_drop,
+            self.training,
+        )
+        x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
