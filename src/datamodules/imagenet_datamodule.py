@@ -94,7 +94,7 @@ class ImageNetDataModule(LightningDataModule):
         num_workers_val: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
-        persistent_workers: bool = False,
+        persistent_workers: bool = False
     ) -> None:
         """Initialize an `ImageNetDataModule`.
 
@@ -254,7 +254,7 @@ class ImageNetDataModule(LightningDataModule):
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self.collate_fn,
             shuffle=True,
-            persistent_workers=self.hparams.persistent_workers,
+            persistent_workers=self.hparams.persistent_workers
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
