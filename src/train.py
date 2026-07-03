@@ -131,10 +131,8 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     log.info("Starting training!")
 
-=======
     sdpa_context = build_sdpa_context(cfg.get("allow_memory_efficient_backend", False))
     with tracker, sdpa_context:
->>>>>>> main
         # Note: Flash Attention only works with mixed precision, otherwise you will see:
         #   RuntimeError('No available kernel. Aborting execution.')
         # when calling `scaled_dot_product_attention`
