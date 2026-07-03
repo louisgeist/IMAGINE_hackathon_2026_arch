@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 import subprocess
 from typing import Any, Dict, List, Tuple
 
@@ -85,9 +86,24 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             for k, v in metric_dict.items():
                 f.write(f"{k}: {v}\n")
 
-        # Send to evaluation server
+        # Print time, energy and emissions
         experiment_name = rel_ckpt_path.split(os.sep)[0]
         emissions_path = os.path.join(cfg.paths.codecarbon_dir, *rel_ckpt_dir, "emissions.csv")
+        
+        if os.path.isfile(emissions_path):
+            with open(emissions_path, 'r') as f:
+                df = pd.read_csv(f)
+            energy_kwh = df.iloc[-1]['energy_consumed']
+            duration_s = df.iloc[-1]['duration']
+            emissions_kgco2e = df.iloc[-1]['emissions']
+            print(f"Energy: {energy_kwh:.2f} kWh")
+            print(f"Time: {duration_s:.2f} s")
+            print(f"Emissions: {emissions_kgco2e * 1e3:.2f} gCO2eq")
+        else:
+            print(f"Couldn't find {emissions_path}!")
+        
+        
+        # Send to evaluation server
         dest_dir = f"172.22.11.44::eval_server/valid/{cfg.team_name}/{experiment_name}/"
         subprocess.call(["rsync", "-avz", "--mkpath", prediction_path, f"{dest_dir}metrics.txt"])
         subprocess.call(["rsync", "-avz", "--mkpath", emissions_path, f"{dest_dir}emissions.csv"])
