@@ -1,10 +1,13 @@
 defaults:
- - /encoder: attention
-  - optimizer: adamw
-  - _self_
- 
+  - /encoder: attention
 
 _target_: src.modules.imagenet_module.ImageNetModule
+
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: 1e-3
+  weight_decay: 1e-4
 
 main_scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR

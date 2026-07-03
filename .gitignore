@@ -21,7 +21,6 @@ logs/*
 codecarbon/*
 predictions/*
 outputs
-eval_output/
 
 !data/.gitkeep
 !logs/.gitkeep

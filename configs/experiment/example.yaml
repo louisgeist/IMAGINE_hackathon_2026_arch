@@ -5,7 +5,6 @@
 
 defaults:
   - override /trainer: imagenet_vit_s_16
-  - override /datamodule: default_q50
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
@@ -13,7 +12,7 @@ defaults:
 seed: 42
 
 trainer:
-  precision: 16-mixed
+  precision: 32
 
 module:
   compile: false
@@ -21,5 +20,5 @@ module:
 # Remember to define experiment_name and tags in all your experiments!
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
 # Second tag options: train, pre-train, post-train, debug, <custom tag>
-experiment_name: "example_train_val_jpeg50"
+experiment_name: "example"
 tags: ["explore", "train"]
