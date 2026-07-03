@@ -39,7 +39,11 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
     log.info(f"Instantiating model <{cfg.module._target_}>")
-    model: LightningModule = hydra.utils.instantiate(cfg.module)
+    model: LightningModule = hydra.utils.instantiate(
+        cfg.module,
+        cutmix_alpha=cfg.datamodule.cutmix_alpha,
+        mixup_alpha=cfg.datamodule.mixup_alpha,
+    )
 
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
@@ -73,11 +77,15 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         model.load_state_dict(renamed_ckpt)
 
         # Predict
-        predictions = trainer.predict(model=model, datamodule=datamodule, return_predictions=True)
+        predictions = trainer.predict(
+            model=model, datamodule=datamodule, return_predictions=True
+        )
         predictions = torch.cat(predictions, axis=0)
 
         # Save predictions
-        rel_ckpt_dir = rel_ckpt_path.split(os.sep)[:-2]  # Strip '/checkpoints/<checkpoint name>'
+        rel_ckpt_dir = rel_ckpt_path.split(os.sep)[
+            :-2
+        ]  # Strip '/checkpoints/<checkpoint name>'
         prediction_subdir = os.path.join(cfg.paths.prediction_dir, *rel_ckpt_dir)
         os.makedirs(prediction_subdir, exist_ok=True)
         prediction_path = os.path.join(prediction_subdir, "predictions.pt")
@@ -85,10 +93,16 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
         # Send to evaluation server
         experiment_name = rel_ckpt_path.split(os.sep)[0]
-        emissions_path = os.path.join(cfg.paths.codecarbon_dir, *rel_ckpt_dir, "emissions.csv")
+        emissions_path = os.path.join(
+            cfg.paths.codecarbon_dir, *rel_ckpt_dir, "emissions.csv"
+        )
         dest_dir = f"172.22.11.44::eval_server/{cfg.team_name}/{experiment_name}/"
-        subprocess.call(["rsync", "-avz", "--mkpath", prediction_path, f"{dest_dir}predictions.pt"])
-        subprocess.call(["rsync", "-avz", "--mkpath", emissions_path, f"{dest_dir}emissions.csv"])
+        subprocess.call(
+            ["rsync", "-avz", "--mkpath", prediction_path, f"{dest_dir}predictions.pt"]
+        )
+        subprocess.call(
+            ["rsync", "-avz", "--mkpath", emissions_path, f"{dest_dir}emissions.csv"]
+        )
 
     metric_dict = trainer.callback_metrics
 
