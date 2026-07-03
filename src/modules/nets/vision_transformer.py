@@ -29,32 +29,23 @@ class VisionTransformer(nn.Module):
         self,
         image_size: int,
         patch_size: int,
-        num_layers: int,
-        num_heads: int,
         hidden_dim: int,
-        mlp_dim: int,
+        encoder: Callable[..., nn.Module],
         dropout: float = 0.0,
-        attention_dropout: float = 0.0,
         num_classes: int = 1000,
         representation_size: Optional[int] = None,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
         conv_stem_configs: Optional[list[ConvStemConfig]] = None,
-        use_qk_norm: bool = False,
-        use_swiglu: bool = False,
     ):
         super().__init__()
         torch._assert(image_size % patch_size == 0, "Input shape indivisible by patch size!")
         self.image_size = image_size
         self.patch_size = patch_size
         self.hidden_dim = hidden_dim
-        self.mlp_dim = mlp_dim
-        self.attention_dropout = attention_dropout
         self.dropout = dropout
         self.num_classes = num_classes
         self.representation_size = representation_size
         self.norm_layer = norm_layer
-        self.use_qk_norm = use_qk_norm
-        self.use_swiglu = use_swiglu
 
         if conv_stem_configs is not None:
             # As per https://arxiv.org/abs/2106.14881
@@ -89,18 +80,7 @@ class VisionTransformer(nn.Module):
         self.class_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
         seq_length += 1
 
-        self.encoder = Encoder(
-            seq_length,
-            num_layers,
-            num_heads,
-            hidden_dim,
-            mlp_dim,
-            dropout,
-            attention_dropout,
-            norm_layer,
-            use_qk_norm,
-            use_swiglu,
-        )
+        self.encoder = encoder(seq_length=seq_length, hidden_dim=hidden_dim)
         self.seq_length = seq_length
 
         heads_layers: OrderedDict[str, nn.Module] = OrderedDict()

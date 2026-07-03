@@ -21,9 +21,9 @@ defaults:
   # debugging config (enable through command line, e.g. `python train.py debug=default)
   - debug: null
 
-team_name: arch       # TODO write your team name HERE
-experiment_name: swiglu # TODO define this in your EXPERIMENT CONFIGS
-tags: train            # TODO define this in your EXPERIMENT CONFIGS
+team_name: arch
+experiment_name: downsize_half
+tags: ["explore", "train"]
 
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
 # Second tag options: train, pre-train, post-train, debug, <custom tag>
@@ -38,6 +38,10 @@ seed: 0
 # some optimization
 trainer:
   precision: 16-mixed
+
+# When True, SDPA may fall back to memory-efficient (and math) kernels for masked attention.
+# Required for local/windowed attention; keep False for global Flash-only training.
+allow_memory_efficient_backend: False
 
 module:
   compile: True

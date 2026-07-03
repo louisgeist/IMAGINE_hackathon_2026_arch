@@ -1,13 +1,16 @@
+# defaults:
+#  - vit_s_16.yaml
+#  - override optimizer: muon
+
+# The Muon optimizer (Muon on hidden weight matrices, auxiliary AdamW on
+# embeddings / head / gains & biases) is selected as a config group above so it
+# fully replaces the base AdamW optimizer instead of merging with it.
+
 defaults:
-  - /encoder: swiglu
+  - optimizer: muon
+  - _self_
 
-_target_: src.modules.imagenet_module.ImageNetModule
-
-optimizer:
-  _target_: torch.optim.AdamW
-  _partial_: true
-  lr: 1e-3
-  weight_decay: 1e-4
+_target_: src.modules.imagenet_muon_module.ImageNetMuonModule
 
 main_scheduler:
     _target_: torch.optim.lr_scheduler.CosineAnnealingLR
@@ -28,4 +31,8 @@ net:
   _target_: src.modules.nets.vision_transformer.VisionTransformer
   image_size: 224
   patch_size: 16
+  num_layers: 12
+  num_heads: 6
   hidden_dim: 384
+  mlp_dim: 1536
+
