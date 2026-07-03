@@ -1,5 +1,4 @@
 import os
-import subprocess
 from typing import Any, Dict, List, Tuple
 
 import hydra
@@ -18,6 +17,7 @@ from src.utils import (
     log_hyperparameters,
     task_wrapper,
 )
+from src.utils.utils import rsync_upload
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
@@ -87,8 +87,8 @@ def evaluate(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         experiment_name = rel_ckpt_path.split(os.sep)[0]
         emissions_path = os.path.join(cfg.paths.codecarbon_dir, *rel_ckpt_dir, "emissions.csv")
         dest_dir = f"172.22.11.44::eval_server/test/{cfg.team_name}/{experiment_name}/"
-        subprocess.call(["rsync", "-avz", "--mkpath", prediction_path, f"{dest_dir}predictions.pt"])
-        subprocess.call(["rsync", "-avz", "--mkpath", emissions_path, f"{dest_dir}emissions.csv"])
+        rsync_upload(prediction_path, f"{dest_dir}predictions.pt")
+        rsync_upload(emissions_path, f"{dest_dir}emissions.csv")
 
     metric_dict = trainer.callback_metrics
 
