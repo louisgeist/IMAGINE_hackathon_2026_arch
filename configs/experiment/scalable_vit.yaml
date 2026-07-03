@@ -14,7 +14,7 @@ seed: 0
 
 # torch.compile not supported
 module:
-  compile: false
+  compile: true
 
 # Remember to define experiment_name and tags in all your experiments!
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
