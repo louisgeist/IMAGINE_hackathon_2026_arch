@@ -1,5 +1,5 @@
 defaults:
-  - /encoder: attention
+  - /encoder: pom
 
 _target_: src.modules.imagenet_module.ImageNetModule
 
@@ -23,7 +23,7 @@ warmup_scheduler:
     start_factor: 1e-2
     total_iters: ${module.warmup_steps}
 
-# ViT-S/16
+# ViT-S/16 with PoM encoder
 net:
   _target_: src.modules.nets.vision_transformer.VisionTransformer
   image_size: 224

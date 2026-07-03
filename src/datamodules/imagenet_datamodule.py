@@ -94,7 +94,7 @@ class ImageNetDataModule(LightningDataModule):
         num_workers_val: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
-        persistent_workers: bool = False,
+        persistent_workers: bool = False
     ) -> None:
         """Initialize an `ImageNetDataModule`.
 
@@ -222,10 +222,16 @@ class ImageNetDataModule(LightningDataModule):
 
         :param stage: The stage to setup. Either `"fit"`, `"validate"`, `"test"`, or `"predict"`. Defaults to ``None``.
         """
-        if stage in ("test", "predict") or stage is None:
-            if not self.data_test:
+        if not self.data_test:
+            test_path = os.path.join(self.hparams.data_path, self.hparams.test_dir)
+            if stage == "predict":
                 self.data_test = UnlabeledImageFolder(
-                    os.path.join(self.hparams.data_path, self.hparams.test_dir),
+                    test_path,
+                    transform=self.eval_transforms,
+                )
+            elif stage == "test":
+                self.data_test = ImageFolder(
+                    test_path,
                     transform=self.eval_transforms,
                 )
         if stage in ("fit", "validate") or stage is None:
@@ -254,7 +260,7 @@ class ImageNetDataModule(LightningDataModule):
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self.collate_fn,
             shuffle=True,
-            persistent_workers=self.hparams.persistent_workers,
+            persistent_workers=self.hparams.persistent_workers
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -279,7 +285,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_test,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_val,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
