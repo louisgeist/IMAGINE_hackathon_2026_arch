@@ -23,7 +23,7 @@ tags: ["final", "evaluate"]
 seed: 0
 
 trainer:
-  precision: 32
+  precision: 16-mixed
 
 module:
   compile: false
