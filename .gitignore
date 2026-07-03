@@ -5,7 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
-
+wandb/
+eval_output/
 # Virtual environments
 .venv
 
@@ -25,3 +26,6 @@ outputs
 !logs/.gitkeep
 !codecarbon/.gitkeep
 !predictions/.gitkeep
+delete.*
+
+delete*
