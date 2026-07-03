@@ -11,18 +11,22 @@ dependencies = [
     "hydra-optuna-sweeper>=1.2.0",
     "kornia>=0.8.3",
     "lightning<=2.6.1",
+    "pandas>=3.0.3",
     "rich>=15.0.0",
     "rootutils>=1.0.7",
     "scipy>=1.17.1",
+    "timm>=1.0.0",
     "torch==2.10.0",
     "torchvision==0.25.0",
     "wandb>=0.26.1",
+    "pom",
 ]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
 codecarbon = { git = "https://github.com/Archiel19/codecarbon.git", branch = "wandb" }
+pom = { git = "https://github.com/davidpicard/pom.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

@@ -91,9 +91,11 @@ class ImageNetDataModule(LightningDataModule):
         mixup_alpha: float = 0.0,
         random_erase_prob: float = 0.0,
         batch_size: int = 64,
-        num_workers: int = 4,
+        num_workers_train: int = 4,
+        num_workers_val: int = 4,
         prefetch_factor: int = 2,
         pin_memory: bool = False,
+        persistent_workers: bool = False,
         uint8_pipeline: bool = True,
     ) -> None:
         """Initialize an `ImageNetDataModule`.
@@ -130,7 +132,7 @@ class ImageNetDataModule(LightningDataModule):
         self.save_hyperparameters(logger=False)
 
         # data transformations
-        self.auto_augment_policy = auto_augment_policy
+                self.auto_augment_policy = auto_augment_policy
         self.interpolation = interpolation
 
         self.train_crop_size = train_crop_size
@@ -144,19 +146,72 @@ class ImageNetDataModule(LightningDataModule):
         self.random_erase_prob = random_erase_prob
 
         self.uint8_pipeline = uint8_pipeline
-        self.imagenet_mean = (0.485, 0.456, 0.406)
-        self.imagenet_std = (0.229, 0.224, 0.225)
-
+        interpolation_mode = T.InterpolationMode(interpolation)
+        self.interpolation_mode = interpolation_mode
+        imagenet_mean = (0.485, 0.456, 0.406)
+        imagenet_std = (0.229, 0.224, 0.225)
         if uint8_pipeline:
             self.collate_fn = default_collate
         else:
-            mixup_cutmix = self._get_mixup_cutmix(
-                mixup_alpha=mixup_alpha, cutmix_alpha=cutmix_alpha
+            train_transforms = []
+            train_transforms.append(
+                T.RandomResizedCrop(train_crop_size, interpolation=interpolation_mode)
             )
-            if mixup_cutmix is not None:
-                self.collate_fn = lambda batch: mixup_cutmix(*default_collate(batch))
-            else:
-                self.collate_fn = default_collate
+            if hflip_prob > 0:
+                train_transforms.append(T.RandomHorizontalFlip(hflip_prob))
+
+            if auto_augment_policy is not None:
+                if auto_augment_policy == "ra":
+                    train_transforms.append(
+                        T.RandAugment(
+                            interpolation=interpolation_mode, magnitude=ra_magnitude
+                        )
+                    )
+                elif auto_augment_policy == "ta_wide":
+                    train_transforms.append(
+                        T.TrivialAugmentWide(interpolation=interpolation_mode)
+                    )
+                elif auto_augment_policy == "augmix":
+                    train_transforms.append(
+                        T.AugMix(interpolation=interpolation_mode, severity=augmix_severity)
+                    )
+                else:
+                    aa_policy = T.AutoAugmentPolicy(auto_augment_policy)
+                    train_transforms.append(
+                        T.AutoAugment(policy=aa_policy, interpolation=interpolation_mode)
+                    )
+
+            train_transforms.extend(
+                [
+                    T.PILToTensor(),
+                    T.ToDtype(torch.float, scale=True),
+                    T.Normalize(mean=imagenet_mean, std=imagenet_std),
+                ]
+            )
+            if random_erase_prob > 0:
+                train_transforms.append(T.RandomErasing(p=random_erase_prob))
+            train_transforms.append(T.ToPureTensor())
+            self.train_transforms = T.Compose(train_transforms)
+
+            self.eval_transforms = T.Compose(
+                [
+                    T.Resize(eval_resize_size, interpolation=interpolation_mode),
+                    T.CenterCrop(eval_crop_size),
+                    T.PILToTensor(),
+                    T.ToDtype(torch.float, scale=True),
+                    T.Normalize(mean=imagenet_mean, std=imagenet_std),
+                    T.ToPureTensor(),
+                ]
+            )
+
+            if cutmix_alpha or mixup_alpha:
+                mixup_cutmix = self._get_mixup_cutmix(
+                    mixup_alpha=mixup_alpha, cutmix_alpha=cutmix_alpha
+                )
+                if mixup_cutmix is not None:
+                    self.collate_fn = lambda batch: mixup_cutmix(*default_collate(batch))
+                else:
+                    self.collate_fn = default_collate
 
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
@@ -255,8 +310,9 @@ class ImageNetDataModule(LightningDataModule):
 
         :param stage: The stage to setup. Either `"fit"`, `"validate"`, `"test"`, or `"predict"`. Defaults to ``None``.
         """
-        if stage in ("test", "predict") or stage is None:
-            if not self.data_test:
+        if not self.data_test:
+            test_path = os.path.join(self.hparams.data_path, self.hparams.test_dir)
+            if stage == "predict":
                 self.data_test = UnlabeledImageFolder(
                     os.path.join(self.hparams.data_path, self.hparams.test_dir),
                     transform=self._get_eval_augmentations(),
@@ -282,11 +338,12 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_train,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             collate_fn=self.collate_fn,
             shuffle=True,
+            persistent_workers=self.hparams.persistent_workers
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -297,7 +354,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_val,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
@@ -311,7 +368,7 @@ class ImageNetDataModule(LightningDataModule):
         return DataLoader(
             dataset=self.data_test,
             batch_size=self.batch_size_per_device,
-            num_workers=self.hparams.num_workers,
+            num_workers=self.hparams.num_workers_val,
             pin_memory=self.hparams.pin_memory,
             prefetch_factor=self.hparams.prefetch_factor,
             shuffle=False,
@@ -354,7 +411,13 @@ class ImageNetDataModule(LightningDataModule):
             mixup_cutmix.append(
                 T.MixUp(alpha=mixup_alpha, num_classes=self.num_classes)
             )
+            mixup_cutmix.append(
+                T.MixUp(alpha=mixup_alpha, num_classes=self.num_classes)
+            )
         if cutmix_alpha > 0:
+            mixup_cutmix.append(
+                T.CutMix(alpha=cutmix_alpha, num_classes=self.num_classes)
+            )
             mixup_cutmix.append(
                 T.CutMix(alpha=cutmix_alpha, num_classes=self.num_classes)
             )
