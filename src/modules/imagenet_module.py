@@ -81,8 +81,6 @@ class ImageNetModule(LightningModule):
         # also ensures init params will be stored in ckpt
         self.save_hyperparameters(logger=True, ignore=["net"])
 
-        self.uint8_pipeline = uint8_pipeline
-
         if uint8_pipeline:
             imagenet_mean = (0.485, 0.456, 0.406)
             imagenet_std = (0.229, 0.224, 0.225)
@@ -207,7 +205,7 @@ class ImageNetModule(LightningModule):
         :param batch_idx: The index of the current batch.
         :return: A tensor of losses between model predictions and targets.
         """
-        if self.uint8_pipeline:
+        if self.hparams.uint8_pipeline:
             source, targets = batch
             source = source.float() / 255.0
             source = self.train_augmentations(source)
@@ -242,7 +240,7 @@ class ImageNetModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        if self.uint8_pipeline:
+        if self.hparams.uint8_pipeline:
             source, targets = batch
             source = source.float() / 255.0
             source = self.valid_augmentations(source)
@@ -266,7 +264,7 @@ class ImageNetModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        if self.uint8_pipeline:
+        if self.hparams.uint8_pipeline:
             source, targets = batch
             source = source.float() / 255.0
             source = self.valid_augmentations(source)
