@@ -11,6 +11,7 @@ from typing import Any, Callable, NamedTuple, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class ConvStemConfig(NamedTuple):
@@ -279,6 +280,8 @@ class Encoder(nn.Module):
         dropout: float,
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
+        use_qk_norm: bool = False,
+        use_swiglu: bool = False,
         pos_embedding_type: str = "learned",
     ):
         super().__init__()
@@ -315,6 +318,8 @@ class Encoder(nn.Module):
                 dropout,
                 attention_dropout,
                 norm_layer,
+                use_qk_norm,
+                use_swiglu,
                 rotary=self.rotary,
             )
         self.layers = nn.Sequential(layers)
@@ -329,6 +334,89 @@ class Encoder(nn.Module):
         return self.ln(self.layers(self.dropout(input)))
 
 
+class RMSNorm(nn.Module):
+    """Root mean square layer normalization, as used in Qwen for QK-Norm.
+
+    Normalizes over the last dimension (the per-head dimension here) and applies
+    a learned per-element scale. The reduction is done in fp32 for numerical
+    stability under mixed precision, then cast back to the input dtype so the
+    downstream Flash Attention kernel still receives fp16/bf16 tensors.
+    """
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dtype = x.dtype
+        x = x.float()
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return (x * self.weight).to(dtype)
+
+
+class QKNormAttention(nn.Module):
+    """Multi-head self-attention with optional Qwen-style QK-Norm.
+
+    Drop-in replacement for ``nn.MultiheadAttention`` (batch_first, self-attention
+    only). When ``use_qk_norm`` is True, RMSNorm is applied to the queries and keys
+    over the per-head dimension before the dot product. Attention itself is computed
+    with ``F.scaled_dot_product_attention`` so the Flash Attention backend (forced in
+    ``train.py``) is preserved.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        attention_dropout: float,
+        use_qk_norm: bool = True,
+    ):
+        super().__init__()
+        torch._assert(
+            hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
+        )
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        self.attention_dropout = attention_dropout
+
+        self.in_proj = nn.Linear(hidden_dim, 3 * hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+
+        # A single set of head_dim weights, shared across all heads.
+        self.q_norm = RMSNorm(self.head_dim) if use_qk_norm else nn.Identity()
+        self.k_norm = RMSNorm(self.head_dim) if use_qk_norm else nn.Identity()
+
+        # Match nn.MultiheadAttention's initialization for comparability.
+        nn.init.xavier_uniform_(self.in_proj.weight)
+        nn.init.zeros_(self.in_proj.bias)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, N, C = x.shape
+        # (B, N, 3 * C) -> (B, N, 3, num_heads, head_dim)
+        qkv = self.in_proj(x).reshape(B, N, 3, self.num_heads, self.head_dim)
+        q, k, v = qkv.unbind(2)  # each (B, N, num_heads, head_dim)
+
+        q = self.q_norm(q)  # Qwen QK-Norm over head_dim
+        k = self.k_norm(k)
+
+        # (B, N, num_heads, head_dim) -> (B, num_heads, N, head_dim)
+        q, k, v = (t.transpose(1, 2) for t in (q, k, v))
+
+        x = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+        )
+
+        # (B, num_heads, N, head_dim) -> (B, N, C)
+        x = x.transpose(1, 2).reshape(B, N, C)
+        return self.out_proj(x)
+
+
 class EncoderBlock(nn.Module):
     """Transformer encoder block."""
 
@@ -340,38 +428,41 @@ class EncoderBlock(nn.Module):
         dropout: float,
         attention_dropout: float,
         norm_layer: Callable[..., torch.nn.Module] = partial(nn.LayerNorm, eps=1e-6),
+        use_qk_norm: bool = False,
+        use_swiglu: bool = False,
         rotary: Optional[RotaryEmbedding] = None,
     ):
         super().__init__()
         self.num_heads = num_heads
 
-        # Attention block. With a rotary embedding we need access to Q/K, so we swap the stock
-        # nn.MultiheadAttention for a rotary-aware implementation.
+        # Attention block. With a rotary embedding Q/K are rotated inside attention, so we use
+        # a rotary-aware implementation instead of QKNormAttention.
         self.ln_1 = norm_layer(hidden_dim)
-        self.uses_rope = rotary is not None
-        if self.uses_rope:
+        if rotary is not None:
+            torch._assert(not use_qk_norm, "RoPE attention does not support QK-Norm yet")
             self.self_attention = RoPESelfAttention(
                 hidden_dim, num_heads, attention_dropout, rotary
             )
         else:
-            self.self_attention = nn.MultiheadAttention(
-                hidden_dim, num_heads, dropout=attention_dropout, batch_first=True
+            self.self_attention = QKNormAttention(
+                hidden_dim, num_heads, attention_dropout, use_qk_norm=use_qk_norm
             )
         self.dropout = nn.Dropout(dropout)
 
         # MLP block
         self.ln_2 = norm_layer(hidden_dim)
-        self.mlp = MLPBlock(hidden_dim, mlp_dim, dropout)
+        self.mlp = (
+            SwiGLUMLPBlock(hidden_dim, mlp_dim, dropout)
+            if use_swiglu
+            else MLPBlock(hidden_dim, mlp_dim, dropout)
+        )
 
     def forward(self, input: torch.Tensor):
         torch._assert(
             input.dim() == 3, f"Expected (batch_size, seq_length, hidden_dim) got {input.shape}"
         )
         x = self.ln_1(input)
-        if self.uses_rope:
-            x = self.self_attention(x)
-        else:
-            x, _ = self.self_attention(x, x, x, need_weights=False)
+        x = self.self_attention(x)
         x = self.dropout(x)
         x = x + input
 
@@ -470,6 +561,35 @@ class MLPBlock(MLP):
             unexpected_keys,
             error_msgs,
         )
+
+
+class SwiGLUMLPBlock(nn.Module):
+    """Transformer MLP block with a SwiGLU gated activation.
+
+    Replaces the standard two-matrix GELU MLP with a gated linear unit:
+    ``out = W_down( SiLU(W_gate x) * W_up x )``. This uses three projection
+    matrices instead of two, so to keep the parameter count comparable to the
+    GELU MLP set ``mlp_dim`` to ~2/3 of the GELU hidden dim (e.g. 1024 vs 1536).
+    """
+
+    def __init__(self, in_dim: int, mlp_dim: int, dropout: float):
+        super().__init__()
+        self.w_gate = nn.Linear(in_dim, mlp_dim)
+        self.w_up = nn.Linear(in_dim, mlp_dim)
+        self.w_down = nn.Linear(mlp_dim, in_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Match MLPBlock's initialization for comparability.
+        for m in (self.w_gate, self.w_up, self.w_down):
+            nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.normal_(m.bias, std=1e-6)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.silu(self.w_gate(x)) * self.w_up(x)
+        x = self.dropout(x)
+        x = self.w_down(x)
+        return self.dropout(x)
 
 
 class ConvNormActivation(torch.nn.Sequential):

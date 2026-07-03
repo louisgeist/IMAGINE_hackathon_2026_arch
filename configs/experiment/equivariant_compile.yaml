@@ -1,0 +1,26 @@
+# @package _global_
+
+# p4 group-equivariant CNN: translation- and 90-degree-rotation-equivariant.
+# to execute this experiment run:
+#   uv run src/train.py experiment=equivariant
+
+defaults:
+  - override /module: equivariant
+  - override /datamodule: default_q50
+
+seed: 42
+
+# Remember to define experiment_name and tags in all your experiments!
+# First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
+# Second tag options: train, pre-train, post-train, debug, <custom tag>
+experiment_name: "equivariant_compile"
+tags: ["explore", "train"]
+
+# The group-conv weight transforms are implemented as static index gathers
+# (see equivariant_net.py), so torch.compile traces them cleanly.
+module:
+  compile: true
+
+# datamodule:
+#   num_workers_train: 8
+

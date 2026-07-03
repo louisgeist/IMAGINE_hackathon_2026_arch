@@ -27,3 +27,5 @@ outputs
 !codecarbon/.gitkeep
 !predictions/.gitkeep
 delete.*
+
+delete*
