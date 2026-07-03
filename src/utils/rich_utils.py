@@ -86,7 +86,8 @@ def enforce_tags(cfg: DictConfig, save_to_file: bool = False) -> None:
             raise ValueError("Specify tags before launching a multirun!")
 
         log.warning("No tags provided in config. Prompting user to input tags...")
-        tags = Prompt.ask("Enter a list of comma separated tags", default="dev")
+        tag_options = "   Project stage tags: data, explore, baseline, ablate, hyperparam, final, <custom tag>\n   Run type tags: train, pre-train, post-train, debug, <custom tag>\n"
+        tags = Prompt.ask(f"Enter two comma-separated tags: one project stage tag, one run type tag\n{tag_options}", default="dev")
         tags = [t.strip() for t in tags.split(",") if t != ""]
 
         with open_dict(cfg):

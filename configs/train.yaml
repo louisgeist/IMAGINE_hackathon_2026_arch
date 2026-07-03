@@ -21,17 +21,13 @@ defaults:
   # debugging config (enable through command line, e.g. `python train.py debug=default)
   - debug: null
 
-# TODO write your team name
-team_name: "arch"
-experiment_name: "baseline"
-
-# tags to help you identify your experiments
-# you can overwrite tags in experiment configs
-# overwrite from command line with `uv run src/train.py tags="[first_tag, second_tag]"`
+team_name: "arch"       # TODO write your team name HERE
+experiment_name: ??? # TODO define this in your EXPERIMENT CONFIGS
+tags: ???            # TODO define this in your EXPERIMENT CONFIGS
 
 # First tag options: data, explore, baseline, ablate, hyperparam, final, <custom tag>
 # Second tag options: train, pre-train, post-train, debug, <custom tag>
-tags: ["baseline", "train"]
+# Example: ["baseline", "train"]
 
 # simply provide checkpoint path to resume training
 ckpt_path: null
@@ -42,6 +38,10 @@ seed: 0
 # some optimization
 trainer:
   precision: 16-mixed
+
+# When True, SDPA may fall back to memory-efficient (and math) kernels for masked attention.
+# Required for local/windowed attention; keep False for global Flash-only training.
+allow_memory_efficient_backend: False
 
 module:
   compile: True

@@ -1,15 +1,17 @@
+import contextlib
 import math
-import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
 import lightning as L
 import rootutils
 import torch
+from codecarbon import EmissionsTracker
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping, EarlyStoppingReason
+from lightning.pytorch.callbacks.early_stopping import EarlyStoppingReason
 from lightning.pytorch.loggers import Logger
 from omegaconf import DictConfig
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 # ------------------------------------------------------------------------------------ #
@@ -42,8 +44,31 @@ from src.utils import (
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
+
 # Uses TensorFloat32 or bfloat16 for matrix multiplication when available
 torch.set_float32_matmul_precision("high")
+
+
+def build_sdpa_context(allow_memory_efficient_backend: bool) -> contextlib.AbstractContextManager:
+    """Return the SDPA backend context used for the whole training run."""
+    if allow_memory_efficient_backend:
+        log.info(
+            "SDPA backends enabled: FLASH_ATTENTION, EFFICIENT_ATTENTION, MATH "
+            "(<allow_memory_efficient_backend=True>)"
+        )
+        return sdpa_kernel(
+            [
+                SDPBackend.FLASH_ATTENTION,
+                SDPBackend.EFFICIENT_ATTENTION,
+                SDPBackend.MATH,
+            ]
+        )
+
+    log.info(
+        "SDPA backends enabled: FLASH_ATTENTION only "
+        "(<allow_memory_efficient_backend=False>)"
+    )
+    return sdpa_kernel(SDPBackend.FLASH_ATTENTION)
 
 
 @task_wrapper
@@ -74,14 +99,21 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     log.info(f"Instantiating module <{cfg.module._target_}>")
     model: LightningModule = hydra.utils.instantiate(cfg.module)
 
-    log.info("Instantiating callbacks...")
-    callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
-
     log.info("Instantiating loggers...")
     logger: List[Logger] = instantiate_loggers(cfg.get("logger"))
 
+    log.info("Instantiating callbacks...")
+    callback_dict: Dict[str, Callback] = instantiate_callbacks(cfg.get("callbacks"))
+    callbacks: List[Callback] = list(callback_dict.values())
+
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
+
+    if "codecarbon" in cfg:
+        log.info("Instantiating CodeCarbon tracker...")
+        tracker: EmissionsTracker = instantiate_emissions_tracker(cfg)
+    else:
+        tracker = contextlib.nullcontext()
 
     object_dict = {
         "cfg": cfg,
@@ -90,6 +122,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         "callbacks": callbacks,
         "logger": logger,
         "trainer": trainer,
+        "tracker": tracker,
     }
 
     if logger:
@@ -97,23 +130,25 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log_hyperparameters(object_dict)
 
     log.info("Starting training!")
-    trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+    sdpa_context = build_sdpa_context(cfg.get("allow_memory_efficient_backend", False))
+    with tracker, sdpa_context:
+        # Note: Flash Attention only works with mixed precision, otherwise you will see:
+        #   RuntimeError('No available kernel. Aborting execution.')
+        # when calling `scaled_dot_product_attention`
+        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
 
     # Check why training stopped
-    early_stopping = None
-    for callback in callbacks:
-        if isinstance(callback, EarlyStopping):
-            early_stopping = callback
-            break
-    if early_stopping:
-        if early_stopping.stopping_reason == EarlyStoppingReason.STOPPING_THRESHOLD:
+    early_stopping_cb = callback_dict.get("EarlyStopping")
+
+    if early_stopping_cb:
+        if early_stopping_cb.stopping_reason == EarlyStoppingReason.STOPPING_THRESHOLD:
             print("Training stopped due to reaching stopping threshold")
-        elif early_stopping.stopping_reason == EarlyStoppingReason.NOT_STOPPED:
+        elif early_stopping_cb.stopping_reason == EarlyStoppingReason.NOT_STOPPED:
             print("Training completed normally without early stopping")
 
         # Access human-readable message
-        if early_stopping.stopping_reason_message:
-            print(f"Details: {early_stopping.stopping_reason_message}")
+        if early_stopping_cb.stopping_reason_message:
+            print(f"Details: {early_stopping_cb.stopping_reason_message}")
 
     metric_dict = trainer.callback_metrics
 
@@ -131,14 +166,8 @@ def main(cfg: DictConfig) -> Optional[float]:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    # Create CodeCarbon emissions tracker
-    log.info("Instantiating CodeCarbon tracker")
-    os.makedirs(cfg.codecarbon.output_dir, exist_ok=True)
-    tracker = instantiate_emissions_tracker(cfg)
-
     # train the model
-    with tracker:
-        metric_dict, _ = train(cfg)
+    metric_dict, _ = train(cfg)
 
     # safely retrieve metric value for hydra-based hyperparameter optimization
     metric_value = get_metric_value(
