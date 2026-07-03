@@ -1,5 +1,5 @@
 defaults:
-  - /encoder: attention
+  - /encoder: swiglu
 
 _target_: src.modules.imagenet_module.ImageNetModule
 
