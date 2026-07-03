@@ -27,5 +27,6 @@ eval_output/
 !logs/.gitkeep
 !codecarbon/.gitkeep
 !predictions/.gitkeep
+delete.*
 
 delete*
